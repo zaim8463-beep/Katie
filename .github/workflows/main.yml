@@ -1,5 +1,5 @@
 
-name: Hoda Scripts APK Build
+name: Hoda Scripts Android Build
 
 on:
   push:
@@ -13,12 +13,12 @@ permissions:
 
 jobs:
   build:
-    name: Build Hoda Scripts
+    name: Build Hoda Scripts APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Setup Java 17
@@ -30,7 +30,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Android SDK
+      - name: Install Android SDK packages
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
           yes | sdkmanager --licenses
@@ -40,18 +40,47 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Check project files
+      - name: Find Android project
+        id: project
+        shell: bash
         run: |
-          test -f settings.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
+          SETTINGS=$(find . -maxdepth 5 -type f \( \
+            -name "settings.gradle" -o \
+            -name "settings.gradle.kts" \
+          \) -print -quit)
+
+          if [ -z "$SETTINGS" ]; then
+            echo "ERROR: settings.gradle or settings.gradle.kts not found."
+            echo "Repository files:"
+            find . -maxdepth 4 -type f | head -200
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$SETTINGS")
+
+          if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
+            echo "ERROR: Root build.gradle file not found."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
+             [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "ERROR: app/build.gradle file not found."
+            exit 1
+          fi
+
+          echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project directory: $PROJECT_DIR"
 
       - name: Build APK
-        run: gradle --no-daemon --stacktrace assembleDebug
+        run: |
+          gradle -p "${{ steps.project.outputs.dir }}" \
+            --no-daemon --stacktrace assembleDebug
 
       - name: Verify APK
         run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK="${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           ls -lh "$APK"
 
@@ -59,7 +88,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: HodaScripts-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-        
+          
