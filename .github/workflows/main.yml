@@ -13,15 +13,15 @@ permissions:
 
 jobs:
   build:
-    name: Build Hoda Scripts APK
+    name: Extract and Build Hoda Scripts
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -30,7 +30,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
           yes | sdkmanager --licenses
@@ -40,19 +40,41 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Extract Katie ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 4 -type f -iname "Katie.zip" \
+            -not -path "./.git/*" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Katie.zip was not found in repository."
+            find . -maxdepth 3 -type f
+            exit 1
+          fi
+
+          echo "Found archive: $ZIP_FILE"
+
+          mkdir -p extracted_project
+          unzip -o "$ZIP_FILE" -d extracted_project
+
+          echo "ZIP extracted successfully."
+          find extracted_project -maxdepth 4 -type f | head -200
+
       - name: Find Android project
         id: project
         shell: bash
         run: |
-          SETTINGS=$(find . -maxdepth 5 -type f \( \
+          set -e
+
+          SETTINGS=$(find extracted_project -type f \( \
             -name "settings.gradle" -o \
             -name "settings.gradle.kts" \
-          \) -print -quit)
+          \) -not -path "*/.gradle/*" -print -quit)
 
           if [ -z "$SETTINGS" ]; then
-            echo "ERROR: settings.gradle or settings.gradle.kts not found."
-            echo "Repository files:"
-            find . -maxdepth 4 -type f | head -200
+            echo "ERROR: No settings.gradle found inside Katie.zip."
             exit 1
           fi
 
@@ -60,35 +82,47 @@ jobs:
 
           if [ ! -f "$PROJECT_DIR/build.gradle" ] && \
              [ ! -f "$PROJECT_DIR/build.gradle.kts" ]; then
-            echo "ERROR: Root build.gradle file not found."
+            echo "ERROR: Root build.gradle is missing."
             exit 1
           fi
 
           if [ ! -f "$PROJECT_DIR/app/build.gradle" ] && \
              [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle file not found."
+            echo "ERROR: app/build.gradle is missing."
             exit 1
           fi
 
           echo "dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Project directory: $PROJECT_DIR"
+          echo "Android project found: $PROJECT_DIR"
 
-      - name: Build APK
+      - name: Build Debug APK
         run: |
           gradle -p "${{ steps.project.outputs.dir }}" \
             --no-daemon --stacktrace assembleDebug
 
-      - name: Verify APK
+      - name: Find APK
+        id: apk
+        shell: bash
         run: |
-          APK="${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+          set -e
+
+          APK=$(find "${{ steps.project.outputs.dir }}" \
+            -type f -path "*/build/outputs/apk/*/*.apk" \
+            | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not generated."
+            exit 1
+          fi
+
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
           ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: HodaScripts-APK
-          path: ${{ steps.project.outputs.dir }}/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.apk.outputs.path }}
           if-no-files-found: error
           retention-days: 14
           
